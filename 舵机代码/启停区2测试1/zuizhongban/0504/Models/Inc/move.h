@@ -40,6 +40,7 @@ extern void Move_Init(void);
 extern void Move_Idle_Func(void);
 extern uint32_t my_abs(int data);
 void RunMove(uint8_t dir,uint16_t distance,uint8_t isrunmap);
+void RunMoveDistanceTest(uint8_t dir, uint16_t distance);
 void RunMoveWithIMU(uint8_t dir, uint16_t distance);
 extern uint8_t Rotation(short angle_desired);
 uint8_t TurnIMU(short delta_deg);
@@ -68,7 +69,7 @@ typedef struct {
 
 /*��ͼʱ(x,y,dis)��ز���*/ 
 
-#define 	RUNMOVE_VEL			88
+#define 	RUNMOVE_VEL			77
 
 enum Dir
 {

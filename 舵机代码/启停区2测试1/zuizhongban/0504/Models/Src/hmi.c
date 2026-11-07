@@ -1,5 +1,6 @@
-﻿#include "hmi.h"
+#include "hmi.h"
 #include "usart.h"
+#include "headfile.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -339,7 +340,68 @@ void Hmi_Func(void)
 }
 #endif
 
-/* 当前测试版：S1/S2只选择起点，必须发送##test才启动粗定位。 */
+/*
+ * === 旧版：在HMI串口中断中直接执行41cm动作（已停用）===
+ * 问题：Hmi_Func由USART6中断调用，RunMove内部包含HAL_Delay和串口等待，
+ *       会长时间占用中断；连续点击也没有独立的待执行互锁。
+ */
+#if 0
+#define CALIB_STEP_CM 41
+static uint8_t g_calib_step = 0;
+static void Calib_OneStep(void)
+{
+	uint8_t dir;
+	switch (g_calib_step % 4)
+	{
+		case 0:  dir = FRONT; break;
+		case 1:  dir = BACK;  break;
+		case 2:  dir = LEFT;  break;
+		default: dir = RIGHT; break;
+	}
+	g_calib_step++;
+	RunMove(dir, CALIB_STEP_CM, 0);
+}
+#endif
+
+/*
+ * === 新版：中断只登记请求，主循环执行一次41cm ===
+ * 每次##test只置一个待执行标志；前、后、左、右四次点击完成一个循环。
+ */
+#if MOTOR_DIRECTION_TEST_ENABLE
+static volatile uint8_t g_motor_test_pending = 0;
+static uint8_t g_motor_test_step = 0;
+#endif
+
+uint8_t Hmi_MotorDirectionTestProcess(void)
+{
+#if MOTOR_DIRECTION_TEST_ENABLE
+	uint8_t dir;
+
+	if (!g_motor_test_pending)
+		return 0;
+
+	/* 先清请求，保证本次点击只执行一次。 */
+	g_motor_test_pending = 0;
+	if (Task.TaskFlag != None || Task.CoarseStage != CoarseIdle)
+		return 0;
+
+	switch (g_motor_test_step % 4)
+	{
+		case 0:  dir = FRONT; break;
+		case 1:  dir = BACK;  break;
+		case 2:  dir = LEFT;  break;
+		default: dir = RIGHT; break;
+	}
+
+	g_motor_test_step++;
+	RunMoveDistanceTest(dir, MOTOR_DIRECTION_TEST_DISTANCE_CM);
+	return 1;
+#else
+	return 0;
+#endif
+}
+
+/* 当前测试版：S1/S2只选择起点，##test行为由编译开关选择。 */
 void Hmi_Func(void)
 {
     if (HmiCommandEquals(start_zone1_str, 4))
@@ -352,16 +414,25 @@ void Hmi_Func(void)
     }
     else if (HmiCommandEquals(test_str, 6))
     {
+#if MOTOR_DIRECTION_TEST_ENABLE
+        /* 中断中不驱动电机，只登记一个尚未处理的单步请求。 */
+        if (Task.TaskFlag == None && Task.CoarseStage == CoarseIdle &&
+            !g_motor_test_pending)
+        {
+            g_motor_test_pending = 1;
+        }
+#else
+        /* 关闭电机测试开关后，恢复原完整粗定位测试入口。 */
         if (Task.StartZone != StartZone1 && Task.StartZone != StartZone2)
         {
             memset((void *)HmiCmd, 0, HMI_CMD);
             return;
         }
-
         if (Task.TaskFlag == None && Task.CoarseStage == CoarseIdle)
         {
             StartCoarseTestMode();
         }
+#endif
     }
     else
     {

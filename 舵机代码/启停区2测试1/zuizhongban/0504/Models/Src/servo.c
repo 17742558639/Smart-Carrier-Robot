@@ -35,9 +35,9 @@ void Servo_Init(void)
 {
   HAL_Delay(2000);
   Servo_SetAngle(TIM_CHANNEL_1, JOINT1_FRONT);  // J1=90，正对站点
-  Servo_SetAngle(TIM_CHANNEL_2, JOINT2_WATCH);  // J2=220，观察高度
-  Servo_SetAngle(TIM_CHANNEL_3, JOINT3_WATCH);  // J3=38，观察高度
-  Servo_SetAngle(TIM_CHANNEL_4, JOINT4_WATCH);  // J4=60，观察时爪子打开
+  Servo_SetAngle(TIM_CHANNEL_2, JOINT2_WATCH);  // J2=35，观察高度
+  Servo_SetAngle(TIM_CHANNEL_3, JOINT3_WATCH);  // J3=40，观察高度
+  Servo_SetAngle(TIM_CHANNEL_4, JOINT4_WATCH);  // J4=240，观察时常用张开
 
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
@@ -313,7 +313,7 @@ void Servo_Close_To_Plate(void)
 }
 */
 
-/* B低位放置姿态：J2=360、J3=150，保持J4=0夹紧。 */
+/* 正前方低位姿态：J2=209、J3=169，保持J4=180闭合。 */
 void Servo_Close_To_Plate(void)
 {
   Servo_Move_Pair_To(JOINT2_PLACE_B, JOINT3_PLACE_B, 60);
@@ -478,12 +478,12 @@ void Servo_Catch_To_Move(void)
 }
 */
 
-/* 抬起物料：正前方抓取J2=360/J3=150 -> 搬运J2=260/J3=110。 */
+/* 抬起物料：正前方低位J2=209/J3=169 -> 收回J2=70/J3=60。 */
 void Servo_Catch_To_Move(void)
 {
   int16_t angle2 = JOINT2_CATCH;
   int16_t angle3 = JOINT3_CATCH;
-  /* J4已由Servo_Watch_To_Catch()闭合到0，此处不能先回到70再闭合，否则会松脱物料。 */
+  /* J4已由Servo_Watch_To_Catch()闭合到180，抬臂时继续保持闭合。 */
   Servo_SetAngle(TIM_CHANNEL_4, JOINT4_CATCH);
 
   /* 实测搬运方向：J2、J3均从抓取值减小到搬运值。 */
@@ -529,27 +529,37 @@ void Servo_Watch_To_Move(void)
 }
 */
 
-/* 新版：观察姿态与搬运姿态的J2、J3都按实测起止值移动。 */
+/*
+ * === 旧版：只允许从固定搬运姿态返回观察姿态（已停用）===
+ * 问题：二维码J2=0或低位J2=209返回时，固定从J2_MOVE/J3_MOVE起步会产生跳变。
+ * void Servo_Move_To_Watch(void)
+ * {
+ *   int16_t angle2 = JOINT2_MOVE;
+ *   int16_t angle3 = JOINT3_MOVE;
+ *   while (angle2 > JOINT2_WATCH || angle3 > JOINT3_WATCH)
+ *   {
+ *     if (angle2 > JOINT2_WATCH) angle2 -= 2;
+ *     if (angle3 > JOINT3_WATCH) angle3 -= 2;
+ *     Servo_SetAngle(TIM_CHANNEL_2, (float)angle2);
+ *     Servo_SetAngle(TIM_CHANNEL_3, (float)angle3);
+ *     HAL_Delay(30);
+ *   }
+ *   Servo_SetAngle(TIM_CHANNEL_2, JOINT2_WATCH);
+ *   Servo_SetAngle(TIM_CHANNEL_3, JOINT3_WATCH);
+ *   HAL_Delay(100);
+ * }
+ * === 新版：从当前缓存姿态安全回到90/35/40/240 ===
+ */
 void Servo_Move_To_Watch(void)
 {
-  int16_t angle2 = JOINT2_MOVE;
-  int16_t angle3 = JOINT3_MOVE;
-
-  /* 回观察：J2=260->220，J3=110->38。 */
-  while (angle2 > JOINT2_WATCH || angle3 > JOINT3_WATCH)
-  {
-    if (angle2 > JOINT2_WATCH) angle2 -= 2;
-    if (angle3 > JOINT3_WATCH) angle3 -= 2;
-    Servo_SetAngle(TIM_CHANNEL_2, (float)angle2);
-    Servo_SetAngle(TIM_CHANNEL_3, (float)angle3);
-    HAL_Delay(30);
-  }
-  Servo_SetAngle(TIM_CHANNEL_2, JOINT2_WATCH);
-  Servo_SetAngle(TIM_CHANNEL_3, JOINT3_WATCH);
+  /* 先收回J2/J3，再回正J1，最后把夹爪恢复到常用张开值。 */
+  Servo_Move_Pair_To(JOINT2_WATCH, JOINT3_WATCH, 30);
+  Servo_SetAngle_Slow(TIM_CHANNEL_1, JOINT1_FRONT, 2, 20);
+  Servo_SetAngle_Slow(TIM_CHANNEL_4, JOINT4_WATCH, 5, 50);
   HAL_Delay(100);
 }
 
-/* 新版：观察到搬运：J2=220->260，J3=38->110。 */
+/* 观察到收回姿态：J2=35->70，J3=40->60。 */
 void Servo_Watch_To_Move(void)
 {
   int16_t angle2 = JOINT2_WATCH;
@@ -569,23 +579,35 @@ void Servo_Watch_To_Move(void)
 }
 
 /*
- * A低位摄像头扫描姿态：J1=90、J2=260、J3=60、J4=0。
- * J4先减小到0夹紧物料，再移动J1～J3，避免移动过程中松爪。
- * 此函数只负责舵机，不启动摄像头，也不驱动车体。
+ * === 旧版：函数名表示A低位扫描，但实际宏已改成二维码姿态（已停用）===
+ * 问题：J4错误使用低位闭合值，无法形成90/0/40/240二维码姿态。
+ * void Servo_To_Scan_A(void)
+ * {
+ *   Servo_SetAngle_Slow(TIM_CHANNEL_4, JOINT4_PLACE_B, 5, 70);
+ *   Servo_SetAngle_Slow(TIM_CHANNEL_1, JOINT1_FRONT, 2, 30);
+ *   Servo_Move_Pair_To(JOINT2_SCAN_A, JOINT3_SCAN_A, 60);
+ *   HAL_Delay(100);
+ * }
+ * === 新版：明确执行二维码姿态，不启动摄像头 ===
  */
-void Servo_To_Scan_A(void)
+void Servo_To_Qr_Scan(void)
 {
-  Servo_SetAngle_Slow(TIM_CHANNEL_4, JOINT4_PLACE_B, 5, 70);
-  Servo_SetAngle_Slow(TIM_CHANNEL_1, JOINT1_FRONT, 2, 30);
-  Servo_Move_Pair_To(JOINT2_SCAN_A, JOINT3_SCAN_A, 60);
+  Servo_SetAngle_Slow(TIM_CHANNEL_1, JOINT1_FRONT, 2, 20);
+  Servo_SetAngle_Slow(TIM_CHANNEL_4, JOINT4_SCAN, 5, 50);
+  Servo_Move_Pair_To(JOINT2_SCAN, JOINT3_SCAN, 40);
   HAL_Delay(100);
 }
 
+/* 兼容旧调用名称；当前与二维码扫描姿态完全相同。 */
+void Servo_To_Scan_A(void)
+{
+  Servo_To_Qr_Scan();
+}
+
 /*
- * A扫描姿态到B放置姿态：
- * J2=260->360（读数增加，已到舵机2机械极限）；
- * J3=60->150（按实测数值增加）；J4始终保持0夹紧。
- * 到B姿态后必须由上层流程另行执行J4打开，不能在这里提前松爪。
+ * 二维码姿态到正前方低位姿态：
+ * J2=0->209，J3=40->169，J4移动到180闭合。
+ * 到低位姿态后必须由上层流程另行执行J4打开，不能在这里提前松爪。
  */
 void Servo_Scan_A_To_Place_B(void)
 {
@@ -595,7 +617,7 @@ void Servo_Scan_A_To_Place_B(void)
   HAL_Delay(200);
 }
 
-/* B低位放置后释放物料：J4=0->60，J2/J3保持B姿态不动。 */
+/* 低位放置后释放物料：J4=180->240，J2/J3保持低位姿态不动。 */
 void Servo_Release_At_Place(void)
 {
   Servo_SetAngle_Slow(TIM_CHANNEL_4, JOINT4_PLATE, 5, 100);
@@ -668,13 +690,13 @@ void Servo_Watch_To_Catch(void)
   
 */
 
-/* 观察姿态J2=220/J3=38 -> 正前方抓取J2=360/J3=150。 */
+/* 观察姿态J2=35/J3=40 -> 正前方低位J2=209/J3=169。 */
 void Servo_Watch_To_Catch(void)
 {
   int16_t angle2 = JOINT2_WATCH;
   int16_t angle3 = JOINT3_WATCH;
 
-  /* 本次实测转换中J2、J3均增加；J4最后递减到0夹紧。 */
+  /* 本次实测转换中J2、J3均增加；J4最后递减到180闭合。 */
   while (angle2 < JOINT2_CATCH || angle3 < JOINT3_CATCH)
   {
     if (angle2 < JOINT2_CATCH) angle2 += 2;
@@ -686,7 +708,7 @@ void Servo_Watch_To_Catch(void)
   Servo_SetAngle(TIM_CHANNEL_2, JOINT2_CATCH);
   Servo_SetAngle(TIM_CHANNEL_3, JOINT3_CATCH);
 
-  /* 观察J4=60，抓取J4=0：读数减小表示闭合。 */
+  /* 观察J4=240，低位J4=180：读数减小表示闭合。 */
   for (int16_t angle4 = JOINT4_WATCH; angle4 > JOINT4_CATCH; angle4 -= 5)
   {
     Servo_SetAngle(TIM_CHANNEL_4, (float)angle4);

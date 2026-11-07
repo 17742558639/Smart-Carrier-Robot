@@ -30,7 +30,8 @@ xMOVETAR pxMoveTar;
 
 uint32_t my_abs(int data)
 {
-	if(data < 0) return -data;
+	if(data < 0)
+	return -data;
 	else return data;
 }
 
@@ -77,6 +78,12 @@ void Move_Init(void)
    dir: 0=顺时针(CW), 1=逆时针(CCW)
    ============================================================ */
 #define ROTATE_VEL 45
+
+/*
+ * 走完等待的额外余量（ms）：覆盖 acc=5 的加速段与减速段时间。
+ * 实车标定方法：走 41cm 计时，若车已停稳很久可调小，若还在动则调大。
+ */
+#define RUNMOVE_WAIT_EXTRA_MS   300
 
 void Rotate(uint16_t angle_deg, uint8_t dir)
 {
@@ -354,7 +361,21 @@ void RunMove(uint8_t dir, uint16_t distance, uint8_t isrunmap)
 	Emm_V5_Synchronous_motion(0);
 
 	/* --- 第6步：等待走完 --- */
-	uint32_t wait_ms = (uint32_t)((float)pulses / (float)PULSES_PER_REV * 1000.0f) + 200;
+	/*
+	 * === 旧版：按"1秒转1圈"估算，且没算加减速（已弃用）===
+	 * 问题：
+	 *   1) 假设 1 秒转 1 圈，而 RUNMOVE_VEL=88 实际约 1.47 圈/秒，会白等；
+	 *   2) acc=5 的加速段与减速段都没有计入。
+	 * wait_ms = (uint32_t)((float)pulses / (float)PULSES_PER_REV * 1000.0f) + 200;
+	 *
+	 * === 新版：按实际转速换算 + 加减速余量 ===
+	 * 时间 = 脉冲数 ÷ (每圈脉冲 × 转速/60) × 1000 + 余量
+	 * 例：走 41cm = 5220 脉冲、88rpm ≈ 1.47 圈/秒
+	 *     5220 ÷ (3200 × 1.47) ≈ 1110ms，加余量 300ms ≈ 1410ms
+	 */
+	uint32_t wait_ms = (uint32_t)((float)pulses /
+	                    ((float)PULSES_PER_REV * (float)RUNMOVE_VEL / 60.0f) * 1000.0f)
+	                    + RUNMOVE_WAIT_EXTRA_MS;
 	HAL_Delay(wait_ms);
 
 	/* --- 第7步：陀螺仪校准 —— 走完后方向偏了就修正 --- */
@@ -363,6 +384,59 @@ void RunMove(uint8_t dir, uint16_t distance, uint8_t isrunmap)
 	{
 		Rotation(ref_yaw);  // IMU闭环修正回出发时的朝向
 	}
+}
+
+/*
+ * 纯距离标定：只验证“理论脉冲距离”和“实车位移”。
+ * 方向、1~4号电机地址、速度和同步启动方式与RunMove保持一致；
+ * 特意不调用IMU姿态修正，避免走完后的附加旋转干扰卷尺测量。
+ */
+void RunMoveDistanceTest(uint8_t dir, uint16_t distance)
+{
+	uint32_t pulses = CM_TO_PULSES(distance);
+	uint32_t wait_ms;
+	int x_sign = 0;
+	int y_sign = 0;
+	int w[4];
+
+	/* 测试使用车体坐标：前、后、左、右理论距离均为distance。 */
+	switch (dir)
+	{
+		case RIGHT: x_sign =  1; break;
+		case LEFT:  x_sign = -1; break;
+		case FRONT: y_sign =  1; break;
+		case BACK:  y_sign = -1; break;
+		default: return;
+	}
+
+	/* 与RunMove相同的麦克纳姆轮分解，不对任何单独电机额外反向。 */
+	w[0] =  y_sign - x_sign;       /* 地址1：前右轮 */
+	w[1] = -y_sign + x_sign;       /* 地址2：后左轮 */
+	w[2] = -(y_sign + x_sign);     /* 地址3：前左轮 */
+	w[3] = -(-y_sign - x_sign);    /* 地址4：后右轮 */
+
+	__HAL_UART_CLEAR_FLAG(&huart1, UART_FLAG_TC);
+	HAL_Delay(50);
+	for (uint8_t i = 0; i < 4; i++)
+	{
+		uint8_t dir_cmd = (w[i] >= 0) ? 0 : 1;
+		Emm_V5_Pos_Control(i + 1,
+		                   dir_cmd,
+		                   RUNMOVE_VEL,
+		                   5,
+		                   pulses,
+		                   0,
+		                   1);
+		HAL_Delay(10);
+	}
+	Emm_V5_Synchronous_motion(0);
+
+	/* 等待走完：与 RunMove 用同一套换算（旧版按"1秒1圈"估算，已弃用） */
+	wait_ms = (uint32_t)((float)pulses /
+	          ((float)PULSES_PER_REV * (float)RUNMOVE_VEL / 60.0f) * 1000.0f)
+	          + RUNMOVE_WAIT_EXTRA_MS;
+	HAL_Delay(wait_ms);
+	/* 测距结束即停在当前位置，不执行IMU旋转或其他补偿动作。 */
 }
 
 void PidMove(int x,int y)
@@ -1964,6 +2038,34 @@ static uint8_t CoarseAdvanceTarget(void)
 	}
 }
 
+/*
+ * 粗定位只演示机械臂姿态，不启动摄像头，也不执行真实抓取/放置任务。
+ * 二维码区使用扫描姿态；原料、粗加工、暂存区统一演示正前方低位姿态。
+ */
+static uint8_t CoarseRunStationArmAction(void)
+{
+	switch (Task.CoarseTarget)
+	{
+		case CoarseTargetQr:
+			Servo_To_Qr_Scan();
+			break;
+
+		case CoarseTargetMaterial:
+		case CoarseTargetRough:
+		case CoarseTargetStorage:
+			Servo_Watch_To_Catch();
+			break;
+
+		default:
+			return 0;
+	}
+
+	/* 到位保持1秒，再统一回到观察姿态后继续BFS。 */
+	HAL_Delay(COARSE_TEST_DWELL_MS);
+	Servo_Move_To_Watch();
+	return 1;
+}
+
 static void CoarseEnterFault(uint8_t fault_code)
 {
 	RotationStopAll();
@@ -2078,7 +2180,21 @@ void CoarseProcesing(void)
 			break;
 
 		case CoarseStationDwell:
-			HAL_Delay(COARSE_TEST_DWELL_MS);
+			/*
+			 * === 旧版：只停车等待1秒，不执行机械臂动作（已停用）===
+			 * HAL_Delay(COARSE_TEST_DWELL_MS);
+			 * if (!CoarseAdvanceTarget())
+			 * {
+			 *     CoarseEnterFault(CoarseFaultState);
+			 *     break;
+			 * }
+			 * === 新版：站点动作 -> 保持1秒 -> 回观察姿态 ===
+			 */
+			if (!CoarseRunStationArmAction())
+			{
+				CoarseEnterFault(CoarseFaultState);
+				break;
+			}
 			if (!CoarseAdvanceTarget())
 			{
 				CoarseEnterFault(CoarseFaultState);

@@ -67,6 +67,18 @@ void once_task(void)
  */
 void while_task(void)
 {
+	/*
+	 * === 旧版：测试处理后直接return（已停用）===
+	 * 问题：开关为常量1时，Keil会把后续正常流程报告为不可达代码。
+	 * #if MOTOR_DIRECTION_TEST_ENABLE
+	 * Hmi_MotorDirectionTestProcess();
+	 * return;
+	 * #endif
+	 * === 新版：编译期只保留测试流程或正常流程之一 ===
+	 */
+#if MOTOR_DIRECTION_TEST_ENABLE 
+	Hmi_MotorDirectionTestProcess();
+#else
 	if (Task.CoarseStage != CoarseIdle)
 	{
 		CoarseProcesing();
@@ -76,5 +88,6 @@ void while_task(void)
 	/* 粗定位实车验收前，正式搬运状态机保持编译期隔离。 */
 #if FORMAL_FLOW_ENABLE
 	Procesing();
+#endif
 #endif
 }

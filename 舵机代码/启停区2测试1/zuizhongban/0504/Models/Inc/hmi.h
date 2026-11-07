@@ -7,6 +7,14 @@
 #define FORMAL_FLOW_ENABLE 0
 #define COARSE_TEST_DWELL_MS 1000
 
+/*
+ * 电机方向单步测试开关：
+ * 1：每次点击HMI测试按钮，只执行一个方向41cm；方向按前、后、左、右循环。
+ * 0：恢复##test启动完整粗定位测试流程。
+ */
+#define MOTOR_DIRECTION_TEST_ENABLE      1
+#define MOTOR_DIRECTION_TEST_DISTANCE_CM 41
+
 enum HmiFlag
 {
     None,
@@ -96,5 +104,6 @@ extern void Hmi_Idle_Func(void);
 void UpdateShow(uint8_t which,uint8_t num);
 void StartMode(uint8_t mode);   // 一键启动模式
 void StartCoarseTestMode(void);
+uint8_t Hmi_MotorDirectionTestProcess(void);
 
 #endif
